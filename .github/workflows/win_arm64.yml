@@ -1,4 +1,4 @@
-name: Windows (ARM64)
+name: Windows (ARM64 Native)
 
 on:
   workflow_call:
@@ -6,7 +6,8 @@ on:
 jobs:
   build:
     name: Build
-    runs-on: windows-2025-vs2026
+    # Використовуємо нативний Windows 11 ARM64 раннер із встановленою Visual Studio
+    runs-on: windows-11-vs2026-arm
 
     env:
       POWERSHELL_TELEMETRY_OPTOUT: 1
@@ -17,25 +18,26 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 1. Налаштування MSVC для крос-компіляції з x64 хоста на архітектуру ARM64
-      - name: Setup MSVC for ARM64
+      # 1. Налаштовуємо нативне ARM64 оточення розробника MSVC
+      - name: Setup MSVC for ARM64 (Native)
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: amd64_arm64
+          arch: arm64
 
       - name: Cache Vulkan SDK
         id: cache-vulkan-sdk
         uses: actions/cache@v6
         with:
           path: C:\VulkanSDK
-          key: ${{ runner.os }}-vulkan-sdk-arm64-${{ hashFiles('**/vulkan-sdk.exe') }}
-          restore-keys: ${{ runner.os }}-vulkan-sdk-arm64-
+          key: ${{ runner.os }}-vulkan-sdk-native-arm64-${{ hashFiles('**/vulkan-sdk.exe') }}
+          restore-keys: ${{ runner.os }}-vulkan-sdk-native-arm64-
 
       - name: Install Vulkan SDK with spirv-tools
         run: |-
           if (Test-Path "C:\VulkanSDK") {
             echo "Vulkan SDK found in cache."
           } else {
+            # Використовуємо офіційний прямий лінк на завантаження інсталятора Vulkan SDK
             Invoke-WebRequest -Uri "https://lunarg.com" -OutFile "vulkan-sdk.exe"
             Start-Process -FilePath "vulkan-sdk.exe" -ArgumentList "--accept-licenses", "--default-answer", "--confirm-command", "install" -NoNewWindow -Wait
           }
@@ -44,7 +46,7 @@ jobs:
           echo "VULKAN_SDK=$env:VULKAN_SDK" >> $env:GITHUB_ENV
           echo "${env:VULKAN_SDK}\Bin" >> $env:GITHUB_PATH
 
-          # Verify shader tools are available
+          # Перевіряємо інструменти шейдерів у папці Vulkan SDK
           foreach ($tool in @("glslangValidator", "spirv-opt", "spirv-dis")) {
             $toolPath = "${env:VULKAN_SDK}\Bin\${tool}.exe"
             if (Test-Path "$toolPath") {
@@ -55,8 +57,8 @@ jobs:
             }
           }
 
-          # Verify FXC/DXC is available (ARM64 крос-компіляція зазвичай потребує інструментів з x64 папки Windows SDK)
-          $fxcPaths = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\fxc.exe" -ErrorAction SilentlyContinue | Sort-Object FullName
+          # На ARM64 машині шукаємо fxc.exe у нативній arm64 або x64 папці Windows SDK для компіляції шейдерів DirectX
+          $fxcPaths = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\*\fxc.exe" -ErrorAction SilentlyContinue | Sort-Object FullName
           if ($fxcPaths) {
             $fxcPath = $fxcPaths[-1].FullName
             echo "FXC found at: $fxcPath"
@@ -64,17 +66,17 @@ jobs:
             echo "Warning: fxc.exe not found in Windows SDK"
           }
 
-      # 2. Модифіковане завантаження субмодулів: виключаємо xbyak для x86, залишаємо xbyak_aarch64
-      - name: Download submodules for ARM64
+      # 2. Оновлений фільтр субмодулів: виключаємо x86-версію xbyak та risc, підтягуємо xbyak_aarch64
+      - name: Download submodules
         run: |-
           $SUBMODULES=(Select-String -CaseSensitive '(?<=path = )(?!third_party\/xbyak)(?!third_party\/xbyak_riscv).+' .gitmodules).Matches.Value
           git submodule update --init --depth=1 -j $env:NUMBER_OF_PROCESSORS $SUBMODULES
 
-      # 3. Збірка Xenia з прапорцем архітектури arm64
-      - name: Build Xenia (ARM64)
-        run: python xenia-build.py build --config=Release --target=xenia-app --arch=arm64
+      # 3. Нативна збірка через скрипт проєкту (запуститься нативно як arm64-процес)
+      - name: Build Xenia
+        run: python xenia-build.py build --config=Release --target=xenia-app
 
-      # 4. Пакування та перевірка вихідного бінарника
+      # 4. Пакування результату в архів
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |-
@@ -90,7 +92,8 @@ jobs:
           }
           echo "path=$path" >> $env:GITHUB_OUTPUT
 
-      - name: Upload Xenia Canary ARM64 artifact
+      # 5. Завантаження нативного ARM64 артефакту в GitHub Actions
+      - name: Upload Xenia Canary artifact
         if: ${{ steps.prepare_artifacts.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
