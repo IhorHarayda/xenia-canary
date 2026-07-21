@@ -57,8 +57,7 @@ jobs:
       # 5. Download submodules (без xbyak_aarch64)
       - name: Download submodules
         run: |-
-          $SUBMODULES=(Select-String -CaseSensitive '(?<=path = )(?!third_party\/xbyak_aarch64).+' .gitmodules).Matches.Value
-          git submodule update --init --depth=1 -j $env:NUMBER_OF_PROCESSORS $SUBMODULES
+          $SUBMODULES=(Select-String -CaseSensitive '(?<=path = ).+' .gitmodules).Matches.Value
 
       # 6. Generate version.h
       - name: Generate version.h
