@@ -1,0 +1,329 @@
+name: Linux ARM64 musl Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build (default: canary_experimental)'
+        required: false
+        default: 'canary_experimental'
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04-arm
+
+    # Real Alpine ARM64 userspace.
+    # The GitHub Actions host is still the native ARM64 runner,
+    # but the build itself runs against musl.
+    container:
+      image: alpine:edge
+
+    steps:
+      # 1. Bootstrap Alpine tools required by GitHub Actions and checkout.
+      - name: Bootstrap Alpine
+        run: |
+          apk update
+
+          apk add --no-cache \
+            bash \
+            ca-certificates \
+            git \
+            nodejs \
+            npm
+
+          update-ca-certificates
+
+          echo "=== Alpine ==="
+          cat /etc/alpine-release
+
+          echo "=== Architecture ==="
+          uname -m
+
+          echo "=== libc ==="
+          ldd --version || true
+
+      # 2. Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.branch }}
+
+      # 3. Fix SPIR-V shader compilation
+      - name: Fix SPIR-V shader compilation
+        run: |
+          sed -i 's/"--canonicalize-ids",//g' \
+            tools/build/compile_shader_spirv.py
+
+          if grep -q -- '--canonicalize-ids' \
+            tools/build/compile_shader_spirv.py; then
+            echo "::error::--canonicalize-ids is still present."
+            exit 1
+          fi
+
+          echo "SPIR-V shader compiler compatibility fix applied."
+
+      # 4. Install Alpine build environment
+      #
+      # Everything is native AArch64 and built against musl.
+      # The entire LLVM toolchain is LLVM 22.
+      - name: Setup Alpine ARM64 musl build environment
+        run: |
+          apk add --no-cache \
+            build-base \
+            cmake \
+            ninja \
+            python3 \
+            pkgconf \
+            linux-headers \
+            git \
+            curl \
+            wget \
+            bash \
+            coreutils \
+            findutils \
+            grep \
+            sed \
+            7zip \
+            \
+            clang22 \
+            clang22-dev \
+            llvm22 \
+            llvm22-dev \
+            lld22 \
+            \
+            spirv-tools \
+            glslang \
+            \
+            mesa-dev \
+            vulkan-loader-dev \
+            \
+            gtk+3.0-dev \
+            sdl2-dev \
+            alsa-lib-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb-dev \
+            \
+            valgrind
+
+          echo "=== Compiler ==="
+          clang-22 --version
+          clang++-22 --version
+
+          echo "=== Linker ==="
+          ld.lld --version
+          lld --version
+
+          echo "=== LLVM tools ==="
+          llvm-ar --version
+          llvm-ranlib --version
+          llvm-nm --version
+
+          echo "=== Shader tools ==="
+          glslangValidator --version
+          spirv-opt --version
+          spirv-dis --version
+
+          echo "=== Build tools ==="
+          cmake --version
+          ninja --version
+          python3 --version
+
+      # 5. Make LLVM 22 the complete active toolchain
+      #
+      # Do not mix Clang 22 with LLVM 21/20 tools.
+      # Every compiler, linker and LLVM binary must come from LLVM 22.
+      - name: Configure LLVM 22 toolchain
+        run: |
+          mkdir -p /usr/local/llvm22/bin
+
+          ln -sf "$(command -v clang-22)" \
+            /usr/local/llvm22/bin/clang
+
+          ln -sf "$(command -v clang++-22)" \
+            /usr/local/llvm22/bin/clang++
+
+          ln -sf "$(command -v ld.lld)" \
+            /usr/local/llvm22/bin/ld.lld
+
+          ln -sf "$(command -v lld)" \
+            /usr/local/llvm22/bin/lld
+
+          ln -sf "$(command -v llvm-ar)" \
+            /usr/local/llvm22/bin/llvm-ar
+
+          ln -sf "$(command -v llvm-ranlib)" \
+            /usr/local/llvm22/bin/llvm-ranlib
+
+          ln -sf "$(command -v llvm-nm)" \
+            /usr/local/llvm22/bin/llvm-nm
+
+          echo "/usr/local/llvm22/bin" >> "$GITHUB_PATH"
+
+          echo "CC=/usr/local/llvm22/bin/clang" >> "$GITHUB_ENV"
+          echo "CXX=/usr/local/llvm22/bin/clang++" >> "$GITHUB_ENV"
+
+          echo "AR=/usr/local/llvm22/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "RANLIB=/usr/local/llvm22/bin/llvm-ranlib" >> "$GITHUB_ENV"
+          echo "NM=/usr/local/llvm22/bin/llvm-nm" >> "$GITHUB_ENV"
+
+          echo "=== Active toolchain ==="
+          command -v clang
+          command -v clang++
+          command -v ld.lld
+          command -v llvm-ar
+
+          clang --version
+          clang++ --version
+          ld.lld --version
+          llvm-ar --version
+
+      # 6. Apply all musl-specific Xenia patches
+      - name: Apply musl compatibility patches
+        run: |
+          echo "=== Patch 1: NULL fixes in xam_info.cc ==="
+
+          sed -i 's/return NULL;/return 0;/g' \
+            src/xenia/kernel/xam/xam_info.cc
+
+          echo "=== Patch 2: NULL fixes in xam_content.cc ==="
+
+          sed -i 's/, NULL,/, 0,/g' \
+            src/xenia/kernel/xam/xam_content.cc
+
+          sed -i 's/, NULL);/, 0);/g' \
+            src/xenia/kernel/xam/xam_content.cc
+
+          sed -i 's/xex_path, NULL/xex_path, 0/g' \
+            src/xenia/kernel/xam/xam_content.cc
+
+          sed -i 's/\bNULL\b/0/g' \
+            src/xenia/kernel/xam/xam_content.cc
+
+          echo "=== Patch 3: pthread_sigqueue -> pthread_kill ==="
+
+          sed -i \
+            's/pthread_sigqueue(\([^,]*\),\([^,]*\),[^)]*)/pthread_kill(\1,\2)/g' \
+            src/xenia/base/threading_posix.cc
+
+          echo "=== Patch 4: xbyak_aarch64 cache macros ==="
+
+          sed -i '28i \
+          #ifndef _SC_LEVEL1_ICACHE_SIZE\
+          #define _SC_LEVEL1_ICACHE_SIZE 0\
+          #define _SC_LEVEL1_DCACHE_SIZE 0\
+          #define _SC_LEVEL2_CACHE_SIZE 0\
+          #define _SC_LEVEL3_CACHE_SIZE 0\
+          #endif' \
+            third_party/xbyak_aarch64/src/util_impl_linux.h
+
+          echo "All musl compatibility patches applied."
+
+      # 7. Download all submodules
+      #
+      # xbyak_aarch64 is intentionally included.
+      # It is required by the native ARM64 JIT backend.
+      - name: Download all submodules
+        run: |
+          git submodule update \
+            --init \
+            --depth=1 \
+            -j"$(nproc)"
+
+      # 8. Generate version.h
+      - name: Generate version.h
+        run: |
+          mkdir -p build
+
+          branch=$(git symbolic-ref --short -q HEAD || echo "detached")
+          commit=$(git rev-parse HEAD)
+          commit_short=$(git rev-parse --short HEAD)
+
+          cat <<EOF > build/version.h
+          // Autogenerated for Native ARM64 musl Build
+          #ifndef GENERATED_VERSION_H_
+          #define GENERATED_VERSION_H_
+
+          #define XE_BUILD_BRANCH "$branch"
+          #define XE_BUILD_COMMIT "$commit"
+          #define XE_BUILD_COMMIT_SHORT "$commit_short"
+          #define XE_BUILD_DATE __DATE__
+
+          #endif // GENERATED_VERSION_H_
+          EOF
+
+      # 9. Native CMake configure
+      - name: CMake Configure (Native ARM64 musl)
+        run: |
+          cmake \
+            -S . \
+            -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=/usr/local/llvm22/bin/clang \
+            -DCMAKE_CXX_COMPILER=/usr/local/llvm22/bin/clang++ \
+            -DCMAKE_AR=/usr/local/llvm22/bin/llvm-ar \
+            -DCMAKE_RANLIB=/usr/local/llvm22/bin/llvm-ranlib \
+            -DCMAKE_NM=/usr/local/llvm22/bin/llvm-nm \
+            -DCMAKE_LINKER=/usr/local/llvm22/bin/ld.lld \
+            -DXENIA_BUILD_TESTS=OFF
+
+      # 10. Build Xenia
+      - name: Build via Ninja
+        run: |
+          cmake \
+            --build build \
+            --config Release \
+            --target xenia-app \
+            --parallel "$(nproc)"
+
+      # 11. Prepare artifact
+      - name: Prepare artifacts
+        id: prepare_artifacts
+        run: |
+          binary="build/bin/Linux/xenia_canary"
+
+          if [ ! -f "$binary" ]; then
+            echo "::error::Binary not found: $binary"
+            exit 1
+          fi
+
+          if [ "$(stat -c%s "$binary")" -le 100000 ]; then
+            echo "::error::Binary is too small."
+            exit 1
+          fi
+
+          chmod +x "$binary"
+
+          echo "=== Binary information ==="
+          file "$binary" || true
+          ldd "$binary" || true
+
+          archive="xenia_canary_linux_arm64_musl.7z"
+
+          7z a \
+            "$archive" \
+            "$binary" \
+            LICENSE \
+            -mx9 \
+            -bb3
+
+          if [ ! -f "$archive" ] || \
+             [ "$(stat -c%s "$archive")" -le 100000 ]; then
+            echo "::error::Archive is too small or was not created."
+            exit 1
+          fi
+
+          echo "path=$archive" >> "$GITHUB_OUTPUT"
+
+      # 12. Upload artifact
+      - name: Upload Xenia Canary ARM64 musl artifact
+        if: ${{ steps.prepare_artifacts.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.prepare_artifacts.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+          archive: false
