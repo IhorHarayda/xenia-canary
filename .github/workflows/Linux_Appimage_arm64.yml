@@ -1,4 +1,4 @@
-name: Linux ARM64 AppImage Build
+name: Linux ARM64 Build
 
 on:
   workflow_dispatch:
@@ -66,12 +66,11 @@ jobs:
             spirv-tools \
             glslang-tools \
             p7zip-full \
-            wget \
-            file
+            wget
 
 
           # Pin all LLVM tools to LLVM 22.
-          # This keeps compiler, linker, archiver and LTO tools consistent.
+          # This keeps compiler, linker, LTO and LLVM utilities consistent.
 
           sudo update-alternatives --install \
             /usr/bin/clang \
@@ -136,10 +135,11 @@ jobs:
 
       # 4. Download all submodules
       #
-      # Exactly like the original native ARM64 build.
-      # No architecture-specific submodules are excluded.
+      # Exactly like the Windows ARM64 build:
+      # no architecture-specific submodules are excluded.
       #
       # xbyak_aarch64 is required by the native ARM64 JIT backend.
+
       - name: Download submodules
         run: |
           git submodule update \
@@ -174,9 +174,9 @@ jobs:
 
       # 6. Native CMake configure
       #
-      # Direct native ARM64 build.
-      # No musl patches.
-      # No cross-compilation.
+      # We intentionally do not use xenia-build.py.
+      # The build is configured directly for native ARM64.
+
       - name: CMake Configure (Native ARM64)
         env:
           CC: clang-22
@@ -191,7 +191,7 @@ jobs:
             -DXENIA_BUILD_TESTS=OFF
 
 
-      # 7. Build Xenia
+      # 7. Build
       - name: Build via Ninja
         run: |
 
@@ -202,7 +202,7 @@ jobs:
             --parallel "$(nproc)"
 
 
-      # 8. Install linuxdeploy for ARM64
+      # 8. Install linuxdeploy
       - name: Install linuxdeploy
         run: |
 
@@ -213,7 +213,7 @@ jobs:
           chmod +x linuxdeploy-aarch64.AppImage
 
 
-      # 9. Prepare AppImage directory
+      # 9. Prepare AppImage filesystem
       - name: Prepare AppImage
         run: |
 
@@ -226,25 +226,69 @@ jobs:
 
           chmod +x "$binary"
 
+
           mkdir -p AppDir/usr/bin
           mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
 
-          cp \
-            "$binary" \
+
+          # Copy Xenia
+          cp "$binary" \
             AppDir/usr/bin/xenia_canary
 
 
+          # Create valid application icon.
+          # linuxdeploy requires Icon= in the desktop file
+          # to point to an actual icon file.
+
+          cat > AppDir/usr/share/icons/hicolor/scalable/apps/xenia.svg <<'EOF'
+          <svg xmlns="http://www.w3.org/2000/svg"
+               width="256"
+               height="256"
+               viewBox="0 0 256 256">
+
+            <rect
+              x="8"
+              y="8"
+              width="240"
+              height="240"
+              rx="48"
+              fill="#202020"/>
+
+            <path
+              d="M64 64
+                 L112 112
+                 L64 160
+                 L96 192
+                 L144 144
+                 L192 192
+                 L224 160
+                 L176 112
+                 L224 64
+                 L192 32
+                 L144 80
+                 L96 32
+                 Z"
+              fill="#ffffff"/>
+
+          </svg>
+          EOF
+
+
+          # Desktop entry
           cat > AppDir/usr/share/applications/xenia.desktop <<'EOF'
           [Desktop Entry]
           Name=Xenia Canary
           Comment=Xbox 360 Emulator
           Exec=xenia_canary
+          Icon=xenia
           Type=Application
           Categories=Game;Emulator;
           Terminal=false
           EOF
 
 
+          # AppRun
           cat > AppDir/AppRun <<'EOF'
           #!/bin/sh
 
@@ -261,31 +305,36 @@ jobs:
         run: |
 
           ARCH=aarch64 \
-            ./linuxdeploy-aarch64.AppImage \
+          ./linuxdeploy-aarch64.AppImage \
             --appdir AppDir \
             --desktop-file AppDir/usr/share/applications/xenia.desktop \
             --output appimage
 
 
-          appimage=$(find . -maxdepth 1 \
+      # 11. Rename AppImage
+      - name: Rename AppImage
+        run: |
+
+          appimage=$(find . \
+            -maxdepth 1 \
             -name "*.AppImage" \
             -type f \
             ! -name "linuxdeploy-aarch64.AppImage" \
             | head -n 1)
-
 
           if [ -z "$appimage" ]; then
             echo "::error::AppImage was not created."
             exit 1
           fi
 
+          mv "$appimage" \
+            xenia_canary_arm64_portable.AppImage
 
-          mv "$appimage" xenia-arm64.AppImage
+          chmod +x \
+            xenia_canary_arm64_portable.AppImage
 
-          chmod +x xenia-arm64.AppImage
 
-
-      # 11. Validate build
+      # 12. Validate artifacts
       - name: Validate artifacts
         run: |
 
@@ -301,8 +350,16 @@ jobs:
             exit 1
           fi
 
-          if [ ! -f "xenia-arm64.AppImage" ]; then
+
+          appimage="xenia_canary_arm64_portable.AppImage"
+
+          if [ ! -f "$appimage" ]; then
             echo "::error::AppImage is missing."
+            exit 1
+          fi
+
+          if [ "$(stat -c%s "$appimage")" -le 100000 ]; then
+            echo "::error::AppImage is suspiciously small."
             exit 1
           fi
 
@@ -311,18 +368,31 @@ jobs:
           file "$binary"
 
           echo "=== AppImage ==="
-          file xenia-arm64.AppImage
+          file "$appimage"
 
-          echo "=== Size ==="
-          ls -lh xenia-arm64.AppImage
+          echo "=== Sizes ==="
+          ls -lh \
+            "$binary" \
+            "$appimage"
 
 
-      # 12. Upload only the AppImage
-      - name: Upload ARM64 AppImage
+      # 13. Upload raw ARM64 binary
+      - name: Upload Xenia Canary ARM64 artifact
         uses: actions/upload-artifact@v7
         with:
-          name: xenia-arm64-appimage
-          path: xenia-arm64.AppImage
+          name: xenia-canary-linux-arm64
+          path: build/bin/Linux/xenia_canary
+          if-no-files-found: error
+          retention-days: 7
+          archive: false
+
+
+      # 14. Upload ARM64 AppImage
+      - name: Upload Xenia ARM64 portable AppImage
+        uses: actions/upload-artifact@v7
+        with:
+          name: xenia-canary-arm64-portable-appimage
+          path: xenia_canary_arm64_portable.AppImage
           if-no-files-found: error
           retention-days: 7
           archive: false
