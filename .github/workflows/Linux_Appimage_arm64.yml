@@ -1,4 +1,4 @@
-name: Linux ARM64 Build
+name: Linux Appimage ARM64 Build
 
 on:
   workflow_dispatch:
