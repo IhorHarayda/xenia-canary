@@ -1,4 +1,4 @@
-name: Windows ARM64 Build
+name: Linux ARM64 Build
 
 on:
   workflow_dispatch:
@@ -11,101 +11,198 @@ on:
 jobs:
   build:
     name: Build
-    # Використовуємо виключно нативний Windows 11 ARM64 раннер
-    runs-on: windows-11-vs2026-arm
-
-    env:
-      POWERSHELL_TELEMETRY_OPTOUT: 1
+    runs-on: ubuntu-24.04-arm
 
     steps:
-      # 1. Чек-аут (повна історія для git info)
+      # 1. Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.branch }}
 
-      # 2. Setup MSVC ARM64 native (хост ARM64 -> ціль ARM64)
-      - name: Setup MSVC for ARM64 (Native)
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: arm64
+      # 2. Setup native ARM64 build environment
+      - name: Setup build environment
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
 
-      # 3. Cache Vulkan SDK
-      - name: Cache Vulkan SDK
-        id: cache-vulkan-sdk
-        uses: actions/cache@v6
-        with:
-          path: C:\VulkanSDK
-          key: ${{ runner.os }}-vulkan-sdk-native-arm64-${{ hashFiles('**/vulkan-sdk.exe') }}
-          restore-keys: ${{ runner.os }}-vulkan-sdk-native-arm64-
+          sudo add-apt-repository \
+            "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main"
 
-      # 4. Install Vulkan SDK
-      - name: Install Vulkan SDK with spirv-tools
-        run: |-
-          if (Test-Path "C:\VulkanSDK") {
-            echo "Vulkan SDK found in cache."
-          } else {
-            Invoke-WebRequest -Uri "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe" -OutFile "vulkan-sdk.exe"
-            Start-Process -FilePath "vulkan-sdk.exe" -ArgumentList "--accept-licenses", "--default-answer", "--confirm-command", "install" -NoNewWindow -Wait
-          }
-          $env:VULKAN_SDK = "C:\VulkanSDK\$(Get-ChildItem -Path 'C:\VulkanSDK' -Directory | Select-Object -First 1 -ExpandProperty Name)"
-          $env:PATH += "${env:VULKAN_SDK}\Bin"
-          echo "VULKAN_SDK=$env:VULKAN_SDK" >> $env:GITHUB_ENV
-          echo "${env:VULKAN_SDK}\Bin" >> $env:GITHUB_PATH
+          sudo apt-get update
 
-      # 5. Download submodules (без xbyak_aarch64)
+          sudo apt-get install -y \
+            mesa-vulkan-drivers \
+            valgrind \
+            libc++-dev \
+            libc++abi-dev \
+            libgtk-3-dev \
+            libsdl2-dev \
+            libvulkan-dev \
+            libx11-xcb-dev \
+            clang-18 \
+            lld-18 \
+            spirv-tools \
+            glslang-tools \
+            p7zip-full
+
+          # Pin all LLVM tools to the same version.
+          # This is important for LLVM bitcode and LTO compatibility.
+          sudo update-alternatives --install \
+            /usr/bin/clang \
+            clang \
+            /usr/bin/clang-18 \
+            200
+
+          sudo update-alternatives --install \
+            /usr/bin/clang++ \
+            clang++ \
+            /usr/bin/clang++-18 \
+            200
+
+          sudo update-alternatives --install \
+            /usr/bin/lld \
+            lld \
+            /usr/bin/lld-18 \
+            200
+
+          sudo update-alternatives --install \
+            /usr/bin/ld.lld \
+            ld.lld \
+            /usr/bin/ld.lld-18 \
+            200
+
+          sudo update-alternatives --install \
+            /usr/bin/llvm-ar \
+            llvm-ar \
+            /usr/bin/llvm-ar-18 \
+            200
+
+          sudo update-alternatives --install \
+            /usr/bin/llvm-ranlib \
+            llvm-ranlib \
+            /usr/bin/llvm-ranlib-18 \
+            200
+
+          sudo update-alternatives --install \
+            /usr/bin/llvm-nm \
+            llvm-nm \
+            /usr/bin/llvm-nm-18 \
+            200
+
+          echo "=== Compiler ==="
+          clang --version
+          clang++ --version
+
+          echo "=== Linker ==="
+          ld.lld --version
+
+          echo "=== LLVM tools ==="
+          llvm-ar --version
+          llvm-ranlib --version
+          llvm-nm --version
+
+          echo "=== Shader tools ==="
+          glslangValidator --version
+          spirv-opt --version
+          spirv-dis --version
+
+      # 3. Download all submodules
+      #
+      # Exactly like the Windows ARM64 build:
+      # no architecture-specific submodules are excluded.
+      #
+      # xbyak_aarch64 is required by the native ARM64 JIT backend.
       - name: Download submodules
-        run: |-
-          $SUBMODULES=(Select-String -CaseSensitive '(?<=path = ).+' .gitmodules).Matches.Value 
-          git submodule update --init --depth=1 -j $env:NUMBER_OF_PROCESSORS $SUBMODULES
+        run: |
+          git submodule update \
+            --init \
+            --depth=1 \
+            -j"$(nproc)"
 
-      # 6. Generate version.h
+      # 4. Generate version.h
       - name: Generate version.h
-        run: |-
-          mkdir build -ErrorAction SilentlyContinue
-          $branch = git symbolic-ref --short -q HEAD
-          $commit = git rev-parse HEAD
-          $commit_short = git rev-parse --short HEAD
-          $contents = @"
+        run: |
+          mkdir -p build
+
+          branch=$(git symbolic-ref --short -q HEAD || echo "detached")
+          commit=$(git rev-parse HEAD)
+          commit_short=$(git rev-parse --short HEAD)
+
+          cat <<EOF > build/version.h
           // Autogenerated for Native ARM64 Build
           #ifndef GENERATED_VERSION_H_
           #define GENERATED_VERSION_H_
+
           #define XE_BUILD_BRANCH "$branch"
           #define XE_BUILD_COMMIT "$commit"
           #define XE_BUILD_COMMIT_SHORT "$commit_short"
           #define XE_BUILD_DATE __DATE__
+
           #endif // GENERATED_VERSION_H_
-          "@
-          Set-Content -Path "build\version.h" -Value $contents
+          EOF
 
-      # 7. Native CMake configure
+      # 5. Native CMake configure
+      #
+      # We intentionally do not use xenia-build.py.
+      # The build is configured directly for native ARM64.
       - name: CMake Configure (Native ARM64)
-        run: |-
-          cmake -S . -B build -G "Ninja Multi-Config" -DCMAKE_BUILD_TYPE=Release -DXENIA_BUILD_TESTS=OFF
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: |
+          cmake \
+            -S . \
+            -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DXENIA_BUILD_TESTS=OFF
 
-      # 8. Build
+      # 6. Build
       - name: Build via Ninja
-        run: |-
-          cmake --build build --config Release --target xenia-app
+        run: |
+          cmake \
+            --build build \
+            --config Release \
+            --target xenia-app \
+            --parallel "$(nproc)"
 
-      # 9. Prepare artifacts
+      # 7. Prepare artifacts
       - name: Prepare artifacts
         id: prepare_artifacts
-        run: |-
-          if ((Get-Item "build\bin\Windows\Release\xenia_canary.exe").Length -le 100000) {
-            echo "::error:: Executable is too small."
-            exit 1
-          }
-          $path="xenia_canary_windows_arm64.7z"
-          7z a $path .\build\bin\Windows\Release\xenia_canary.exe LICENSE -mx9 -bb3
-          if ((Get-Item "$path").Length -le 100000) {
-            echo "::error:: Archive is too small."
-            exit 1
-          }
-          echo "path=$path" >> $env:GITHUB_OUTPUT
+        run: |
+          binary="build/bin/Linux/Release/xenia_canary"
 
-      # 10. Upload artifact
+          if [ ! -f "$binary" ]; then
+            echo "::error::Binary not found: $binary"
+            exit 1
+          fi
+
+          if [ "$(stat -c%s "$binary")" -le 100000 ]; then
+            echo "::error::Binary is too small."
+            exit 1
+          fi
+
+          chmod +x "$binary"
+
+          archive="xenia_canary_linux_arm64.7z"
+
+          7z a \
+            "$archive" \
+            "$binary" \
+            LICENSE \
+            -mx9 \
+            -bb3
+
+          if [ ! -f "$archive" ] || [ "$(stat -c%s "$archive")" -le 100000 ]; then
+            echo "::error::Archive is too small or was not created."
+            exit 1
+          fi
+
+          echo "path=$archive" >> "$GITHUB_OUTPUT"
+
+      # 8. Upload artifact
       - name: Upload Xenia Canary ARM64 artifact
         if: ${{ steps.prepare_artifacts.outcome == 'success' }}
         uses: actions/upload-artifact@v7
