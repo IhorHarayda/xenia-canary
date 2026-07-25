@@ -115,28 +115,6 @@ jobs:
             \
             valgrind
 
-          echo "=== Compiler ==="
-          clang-22 --version
-          clang++-22 --version
-
-          echo "=== Linker ==="
-          /usr/lib/llvm22/bin/ld.lld --version
-
-          echo "=== LLVM tools ==="
-          /usr/lib/llvm22/bin/llvm-ar --version
-          /usr/lib/llvm22/bin/llvm-ranlib --version
-          /usr/lib/llvm22/bin/llvm-nm --version
-
-          echo "=== Shader tools ==="
-          glslangValidator --version
-          spirv-opt --version
-          spirv-dis --version
-
-          echo "=== Build tools ==="
-          cmake --version
-          ninja --version
-          python3 --version
-
 
       # 5. Apply all musl-specific Xenia patches
       - name: Apply musl compatibility patches
@@ -217,8 +195,8 @@ jobs:
 
       # 8. Native CMake configure
       #
-      # Every compiler and LLVM tool is explicitly LLVM 22.
-      # No symlinks and no mixed LLVM toolchain.
+      # Alpine provides the complete LLVM 22 toolchain.
+      # CMake resolves the installed compiler and linker normally.
       - name: CMake Configure (Native ARM64 musl)
         run: |
           cmake \
@@ -226,12 +204,8 @@ jobs:
             -B build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=/usr/bin/clang-22 \
-            -DCMAKE_CXX_COMPILER=/usr/bin/clang++-22 \
-            -DCMAKE_AR=/usr/lib/llvm22/bin/llvm-ar \
-            -DCMAKE_RANLIB=/usr/lib/llvm22/bin/llvm-ranlib \
-            -DCMAKE_NM=/usr/lib/llvm22/bin/llvm-nm \
-            -DCMAKE_LINKER=/usr/lib/llvm22/bin/ld.lld \
+            -DCMAKE_C_COMPILER=clang-22 \
+            -DCMAKE_CXX_COMPILER=clang++-22 \
             -DXENIA_BUILD_TESTS=OFF
 
 
@@ -247,7 +221,6 @@ jobs:
 
       # 10. Prepare artifact
       - name: Prepare artifacts
-        id: prepare_artifacts
         run: |
           binary="build/bin/Linux/xenia_canary"
 
@@ -262,10 +235,6 @@ jobs:
           fi
 
           chmod +x "$binary"
-
-          echo "=== Binary information ==="
-          file "$binary" || true
-          ldd "$binary" || true
 
           archive="xenia_canary_linux_arm64_musl.7z"
 
