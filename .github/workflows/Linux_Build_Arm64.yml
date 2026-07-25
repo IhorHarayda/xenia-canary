@@ -138,11 +138,7 @@ jobs:
       # 5. Download submodules
       - name: Download submodules
         run: |
-          SUBMODULES=$(grep -oP \
-            '(?<=path = )(?!third_party\/(?:DirectX(?:-Headers|ShaderCompiler)|xbyak_aarch64)).+' \
-            .gitmodules)
-
-          git submodule update \
+            git submodule update \
             --init \
             --depth=1 \
             -j"$(nproc)" \
