@@ -134,9 +134,9 @@ jobs:
             's/xex_path, NULL/xex_path, 0/g' \
             src/xenia/kernel/xam/xam_content.cc
 
-          # Fix nullptr -> 0 for musl/Clang compatibility
+          # Fix all remaining nullptr values
           sed -i \
-            's/\bnullptr\b/0/g' \
+            's/nullptr/0/g' \
             src/xenia/kernel/xam/xam_content.cc
 
 
