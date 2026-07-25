@@ -20,19 +20,17 @@ jobs:
       GH_TOKEN: ${{ github.token }}
 
     steps:
+
       # 1. Bootstrap Alpine
       - name: Bootstrap Alpine
         run: |
           apk update
 
           apk add --no-cache \
-            bash \
             ca-certificates \
             git \
             nodejs \
             npm \
-            curl \
-            wget \
             github-cli
 
           update-ca-certificates
@@ -45,6 +43,7 @@ jobs:
 
           echo "=== libc ==="
           ldd --version || true
+
 
       # 2. Checkout repository manually
       #
@@ -63,6 +62,7 @@ jobs:
           git branch --show-current
           git rev-parse HEAD
 
+
       # 3. Fix SPIR-V shader compilation
       - name: Fix SPIR-V shader compilation
         run: |
@@ -77,6 +77,7 @@ jobs:
 
           echo "SPIR-V shader compiler compatibility fix applied."
 
+
       # 4. Install Alpine ARM64 musl build environment
       - name: Setup Alpine ARM64 musl build environment
         run: |
@@ -87,10 +88,6 @@ jobs:
             python3 \
             pkgconf \
             linux-headers \
-            git \
-            curl \
-            wget \
-            bash \
             coreutils \
             findutils \
             grep \
@@ -123,13 +120,12 @@ jobs:
           clang++-22 --version
 
           echo "=== Linker ==="
-          ld.lld --version
-          lld --version
+          /usr/lib/llvm22/bin/ld.lld --version
 
           echo "=== LLVM tools ==="
-          llvm-ar --version
-          llvm-ranlib --version
-          llvm-nm --version
+          /usr/lib/llvm22/bin/llvm-ar --version
+          /usr/lib/llvm22/bin/llvm-ranlib --version
+          /usr/lib/llvm22/bin/llvm-nm --version
 
           echo "=== Shader tools ==="
           glslangValidator --version
@@ -141,59 +137,15 @@ jobs:
           ninja --version
           python3 --version
 
-      # 5. Configure complete LLVM 22 toolchain
-      - name: Configure LLVM 22 toolchain
-        run: |
-          mkdir -p /usr/local/llvm22/bin
 
-          ln -sf "$(command -v clang-22)" \
-            /usr/local/llvm22/bin/clang
-
-          ln -sf "$(command -v clang++-22)" \
-            /usr/local/llvm22/bin/clang++
-
-          ln -sf "$(command -v ld.lld)" \
-            /usr/local/llvm22/bin/ld.lld
-
-          ln -sf "$(command -v lld)" \
-            /usr/local/llvm22/bin/lld
-
-          ln -sf "$(command -v llvm-ar)" \
-            /usr/local/llvm22/bin/llvm-ar
-
-          ln -sf "$(command -v llvm-ranlib)" \
-            /usr/local/llvm22/bin/llvm-ranlib
-
-          ln -sf "$(command -v llvm-nm)" \
-            /usr/local/llvm22/bin/llvm-nm
-
-          echo "/usr/local/llvm22/bin" >> "$GITHUB_PATH"
-
-          echo "CC=/usr/local/llvm22/bin/clang" >> "$GITHUB_ENV"
-          echo "CXX=/usr/local/llvm22/bin/clang++" >> "$GITHUB_ENV"
-
-          echo "AR=/usr/local/llvm22/bin/llvm-ar" >> "$GITHUB_ENV"
-          echo "RANLIB=/usr/local/llvm22/bin/llvm-ranlib" >> "$GITHUB_ENV"
-          echo "NM=/usr/local/llvm22/bin/llvm-nm" >> "$GITHUB_ENV"
-
-          echo "=== Active toolchain ==="
-          command -v clang
-          command -v clang++
-          command -v ld.lld
-          command -v llvm-ar
-
-          clang --version
-          clang++ --version
-          ld.lld --version
-          llvm-ar --version
-
-      # 6. Apply all musl-specific Xenia patches
+      # 5. Apply all musl-specific Xenia patches
       - name: Apply musl compatibility patches
         run: |
           echo "=== Patch 1: NULL fixes in xam_info.cc ==="
 
           sed -i 's/return NULL;/return 0;/g' \
             src/xenia/kernel/xam/xam_info.cc
+
 
           echo "=== Patch 2: NULL fixes in xam_content.cc ==="
 
@@ -209,11 +161,13 @@ jobs:
           sed -i 's/\bNULL\b/0/g' \
             src/xenia/kernel/xam/xam_content.cc
 
+
           echo "=== Patch 3: pthread_sigqueue -> pthread_kill ==="
 
           sed -i \
             's/pthread_sigqueue(\([^,]*\),\([^,]*\),[^)]*)/pthread_kill(\1,\2)/g' \
             src/xenia/base/threading_posix.cc
+
 
           echo "=== Patch 4: xbyak_aarch64 cache macros ==="
 
@@ -228,7 +182,8 @@ jobs:
 
           echo "All musl compatibility patches applied."
 
-      # 7. Download all submodules
+
+      # 6. Download all submodules
       - name: Download all submodules
         run: |
           git submodule update \
@@ -236,7 +191,8 @@ jobs:
             --depth=1 \
             -j"$(nproc)"
 
-      # 8. Generate version.h
+
+      # 7. Generate version.h
       - name: Generate version.h
         run: |
           mkdir -p build
@@ -258,7 +214,11 @@ jobs:
           #endif // GENERATED_VERSION_H_
           EOF
 
-      # 9. Native CMake configure
+
+      # 8. Native CMake configure
+      #
+      # Every compiler and LLVM tool is explicitly LLVM 22.
+      # No symlinks and no mixed LLVM toolchain.
       - name: CMake Configure (Native ARM64 musl)
         run: |
           cmake \
@@ -266,15 +226,16 @@ jobs:
             -B build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=/usr/local/llvm22/bin/clang \
-            -DCMAKE_CXX_COMPILER=/usr/local/llvm22/bin/clang++ \
-            -DCMAKE_AR=/usr/local/llvm22/bin/llvm-ar \
-            -DCMAKE_RANLIB=/usr/local/llvm22/bin/llvm-ranlib \
-            -DCMAKE_NM=/usr/local/llvm22/bin/llvm-nm \
-            -DCMAKE_LINKER=/usr/local/llvm22/bin/ld.lld \
+            -DCMAKE_C_COMPILER=/usr/bin/clang-22 \
+            -DCMAKE_CXX_COMPILER=/usr/bin/clang++-22 \
+            -DCMAKE_AR=/usr/lib/llvm22/bin/llvm-ar \
+            -DCMAKE_RANLIB=/usr/lib/llvm22/bin/llvm-ranlib \
+            -DCMAKE_NM=/usr/lib/llvm22/bin/llvm-nm \
+            -DCMAKE_LINKER=/usr/lib/llvm22/bin/ld.lld \
             -DXENIA_BUILD_TESTS=OFF
 
-      # 10. Build Xenia
+
+      # 9. Build Xenia
       - name: Build via Ninja
         run: |
           cmake \
@@ -283,7 +244,8 @@ jobs:
             --target xenia-app \
             --parallel "$(nproc)"
 
-      # 11. Prepare artifact
+
+      # 10. Prepare artifact
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |
@@ -323,10 +285,10 @@ jobs:
           echo "Archive created:"
           ls -lh "$archive"
 
-      # 12. Create GitHub Release
+
+      # 11. Create GitHub Release
       #
-      # This replaces actions/upload-artifact because JavaScript Actions
-      # cannot run inside Alpine ARM64 containers.
+      # JavaScript Actions cannot run inside Alpine ARM64 containers.
       - name: Publish GitHub Release
         run: |
           tag="arm64-musl-${GITHUB_RUN_NUMBER}"
