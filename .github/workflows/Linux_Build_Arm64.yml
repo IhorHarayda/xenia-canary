@@ -185,7 +185,7 @@ jobs:
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |
-          binary="build/bin/Linux/Release/xenia_canary"
+          binary="build/bin/Linux/xenia_canary"
 
           if [ ! -f "$binary" ]; then
             echo "::error::Binary not found: $binary"
