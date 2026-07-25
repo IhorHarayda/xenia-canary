@@ -21,7 +21,20 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.branch }}
 
-      # 2. Setup native ARM64 build environment
+      # 2. fix spirv shader
+      - name: Fix SPIR-V shader compilation
+        run: |
+          sed -i 's/"--canonicalize-ids",//g' \
+            tools/build/compile_shader_spirv.py
+
+          if grep -q -- '--canonicalize-ids' tools/build/compile_shader_spirv.py; then
+            echo "::error::--canonicalize-ids is still present."
+            exit 1
+          fi
+
+          echo "SPIR-V shader compiler compatibility fix applied."
+   
+      # 3. Setup native ARM64 build environment
       - name: Setup build environment
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
