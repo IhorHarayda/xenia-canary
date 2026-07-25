@@ -13,14 +13,14 @@ jobs:
     name: Build
     runs-on: ubuntu-24.04-arm
 
-    # Real Alpine ARM64 userspace.
-    # The GitHub Actions host is still the native ARM64 runner,
-    # but the build itself runs against musl.
     container:
       image: alpine:edge
 
+    env:
+      GH_TOKEN: ${{ github.token }}
+
     steps:
-      # 1. Bootstrap Alpine tools required by GitHub Actions and checkout.
+      # 1. Bootstrap Alpine
       - name: Bootstrap Alpine
         run: |
           apk update
@@ -30,7 +30,10 @@ jobs:
             ca-certificates \
             git \
             nodejs \
-            npm
+            npm \
+            curl \
+            wget \
+            github-cli
 
           update-ca-certificates
 
@@ -43,12 +46,22 @@ jobs:
           echo "=== libc ==="
           ldd --version || true
 
-      # 2. Checkout repository
+      # 2. Checkout repository manually
+      #
+      # actions/checkout cannot run inside Alpine ARM64.
       - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.inputs.branch }}
+        run: |
+          git clone \
+            --branch "${{ github.event.inputs.branch }}" \
+            --depth=1 \
+            "https://github.com/${{ github.repository }}.git" \
+            .
+
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          echo "=== Repository ==="
+          git branch --show-current
+          git rev-parse HEAD
 
       # 3. Fix SPIR-V shader compilation
       - name: Fix SPIR-V shader compilation
@@ -64,10 +77,7 @@ jobs:
 
           echo "SPIR-V shader compiler compatibility fix applied."
 
-      # 4. Install Alpine build environment
-      #
-      # Everything is native AArch64 and built against musl.
-      # The entire LLVM toolchain is LLVM 22.
+      # 4. Install Alpine ARM64 musl build environment
       - name: Setup Alpine ARM64 musl build environment
         run: |
           apk add --no-cache \
@@ -86,6 +96,7 @@ jobs:
             grep \
             sed \
             7zip \
+            file \
             \
             clang22 \
             clang22-dev \
@@ -131,10 +142,7 @@ jobs:
           ninja --version
           python3 --version
 
-      # 5. Make LLVM 22 the complete active toolchain
-      #
-      # Do not mix Clang 22 with LLVM 21/20 tools.
-      # Every compiler, linker and LLVM binary must come from LLVM 22.
+      # 5. Configure complete LLVM 22 toolchain
       - name: Configure LLVM 22 toolchain
         run: |
           mkdir -p /usr/local/llvm22/bin
@@ -222,9 +230,6 @@ jobs:
           echo "All musl compatibility patches applied."
 
       # 7. Download all submodules
-      #
-      # xbyak_aarch64 is intentionally included.
-      # It is required by the native ARM64 JIT backend.
       - name: Download all submodules
         run: |
           git submodule update \
@@ -237,7 +242,7 @@ jobs:
         run: |
           mkdir -p build
 
-          branch=$(git symbolic-ref --short -q HEAD || echo "detached")
+          branch=$(git branch --show-current)
           commit=$(git rev-parse HEAD)
           commit_short=$(git rev-parse --short HEAD)
 
@@ -316,14 +321,25 @@ jobs:
             exit 1
           fi
 
-          echo "path=$archive" >> "$GITHUB_OUTPUT"
+          echo "Archive created:"
+          ls -lh "$archive"
 
-      # 12. Upload artifact
-      - name: Upload Xenia Canary ARM64 musl artifact
-        if: ${{ steps.prepare_artifacts.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
-        with:
-          path: ${{ steps.prepare_artifacts.outputs.path }}
-          if-no-files-found: error
-          retention-days: 7
-          archive: false
+      # 12. Create GitHub Release
+      #
+      # This replaces actions/upload-artifact because JavaScript Actions
+      # cannot run inside Alpine ARM64 containers.
+      - name: Publish GitHub Release
+        run: |
+          tag="arm64-musl-${GITHUB_RUN_NUMBER}"
+
+          gh release create "$tag" \
+            "xenia_canary_linux_arm64_musl.7z" \
+            --title "Xenia Canary Linux ARM64 musl #${GITHUB_RUN_NUMBER}" \
+            --notes "Automated native Linux ARM64 musl build.
+
+          Branch: ${{ github.event.inputs.branch }}
+          Commit: $(git rev-parse HEAD)
+          Architecture: AArch64
+          libc: musl
+          Compiler: LLVM/Clang 22
+          Build: Native ARM64 Alpine Linux"
