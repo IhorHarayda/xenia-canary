@@ -114,7 +114,6 @@ jobs:
             sdl2-dev \
             alsa-lib-dev \
             libx11-dev \
-            libx11-xcb-dev \
             libxcb-dev \
             \
             valgrind
