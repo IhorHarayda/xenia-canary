@@ -56,10 +56,6 @@ jobs:
 
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          echo "=== Repository ==="
-          git branch --show-current
-          git rev-parse HEAD
-
 
       # 3. Fix SPIR-V shader compilation
       - name: Fix SPIR-V shader compilation
@@ -138,6 +134,11 @@ jobs:
             's/xex_path, NULL/xex_path, 0/g' \
             src/xenia/kernel/xam/xam_content.cc
 
+          # Fix nullptr -> 0 for musl/Clang compatibility
+          sed -i \
+            's/\bnullptr\b/0/g' \
+            src/xenia/kernel/xam/xam_content.cc
+
 
           # 3. Fix pthread_sigqueue
           sed -i \
@@ -154,9 +155,6 @@ jobs:
           #define _SC_LEVEL3_CACHE_SIZE 0\
           #endif' \
             third_party/xbyak_aarch64/src/util_impl_linux.h
-
-
-          echo "All musl compatibility patches applied."
 
 
       # 7. Generate version.h
