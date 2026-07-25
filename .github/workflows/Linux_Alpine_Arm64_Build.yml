@@ -116,9 +116,23 @@ jobs:
             valgrind
 
 
-      # 5. Apply all musl-specific Xenia patches
+      # 5. Download all submodules
+      #
+      # This MUST happen before the musl patches.
+      # xbyak_aarch64 is a submodule and its source files
+      # do not exist before initialization.
+      - name: Download all submodules
+        run: |
+          git submodule update \
+            --init \
+            --depth=1 \
+            -j"$(nproc)"
+
+
+      # 6. Apply all musl-specific Xenia patches
       - name: Apply musl compatibility patches
         run: |
+
           echo "=== Patch 1: NULL fixes in xam_info.cc ==="
 
           sed -i 's/return NULL;/return 0;/g' \
@@ -158,16 +172,8 @@ jobs:
           #endif' \
             third_party/xbyak_aarch64/src/util_impl_linux.h
 
+
           echo "All musl compatibility patches applied."
-
-
-      # 6. Download all submodules
-      - name: Download all submodules
-        run: |
-          git submodule update \
-            --init \
-            --depth=1 \
-            -j"$(nproc)"
 
 
       # 7. Generate version.h
@@ -195,8 +201,7 @@ jobs:
 
       # 8. Native CMake configure
       #
-      # Alpine provides the complete LLVM 22 toolchain.
-      # CMake resolves the installed compiler and linker normally.
+      # Alpine provides the complete native LLVM 22 toolchain.
       - name: CMake Configure (Native ARM64 musl)
         run: |
           cmake \
