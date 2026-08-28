@@ -204,8 +204,9 @@ dword_result_t keXamBuildResourceLocator(uint64_t module,
     path = fmt::format(u"section://{:X},{}#{}", (uint32_t)module, container,
                        resource);
   }
+  const uint32_t char_count = buffer_count / sizeof(char16_t);
   xe::string_util::copy_and_swap_truncating(buffer_ptr.as<char16_t*>(), path,
-                                            buffer_count);
+                                            char_count);
   return 0;
 }
 
@@ -278,7 +279,20 @@ dword_result_t XamGetCachedTitleName_entry(dword_t title_id,
     return X_ERROR_INVALID_PARAMETER;
   }
 
-  assert_false(title_id != kernel_state()->title_id());
+  if (title_id != kernel_state()->title_id()) {
+    if (const auto profile = kernel_state()->xam_state()->GetUserProfile(0u);
+        profile) {
+      const auto title =
+          kernel_state()->xam_state()->user_tracker()->GetUserTitleInfo(
+              profile->xuid(), title_id);
+      if (title) {
+        xe::string_util::copy_and_swap_truncating(
+            title_name_ptr, title->title_name, title->title_name.size() + 1);
+        *title_name_length_ptr = title->title_name.size() + 1;
+        return X_ERROR_SUCCESS;
+      }
+    }
+  }
 
   std::u16string title_name = xe::to_utf16(
       kernel_state()->emulator()->game_info_database()->GetTitleName());

@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <type_traits>
 #include <unordered_map>
 
 #include "xenia/base/assert.h"
@@ -47,10 +48,10 @@ namespace gpu {
 //   However, the max level is not ignored because any mip count can be
 //   specified when creating a texture, and another texture may be placed after
 //   the last one.
-// - If the texture has a mip address, but the base address is 0 or the same as
-//   the mip address, a mipmapped texture is created, but min/max LOD is clamped
-//   to the lower bound of 1 - the game is expected to do that anyway until the
-//   largest LOD is loaded.
+// - If the texture has a mip address, but the base address is 0, a mipmapped
+//   texture is created with the minimum LOD clamped to 1.
+// - If the base and mip addresses are the same with a nonzero minimum mip
+//   level, level 0 is already excluded, so the base upload is skipped.
 // TODO(Triang3l): Attach the largest LOD to existing textures with a valid
 // mip_address but no base ever used yet (no base_address) to save memory
 // because textures are streamed this way anyway.
@@ -205,13 +206,8 @@ class TextureCache {
     uint32_t is_valid : 1;  // 98
 
     TextureKey() { MakeInvalid(); }
-    TextureKey(const TextureKey& key) {
-      std::memcpy(this, &key, sizeof(*this));
-    }
-    TextureKey& operator=(const TextureKey& key) {
-      std::memcpy(this, &key, sizeof(*this));
-      return *this;
-    }
+    TextureKey(const TextureKey&) = default;
+    TextureKey& operator=(const TextureKey&) = default;
     void MakeInvalid() {
       // Zero everything, including the padding, for a stable hash.
       std::memset(this, 0, sizeof(*this));
@@ -252,6 +248,10 @@ class TextureCache {
     }
     void LogAction(const char* action) const;
   };
+  static_assert(
+      std::is_trivially_copyable_v<TextureKey>,
+      "TextureKey is compared and hashed by raw bytes; a trivial copy "
+      "is required so padding is carried and stays zero.");
 
   class Texture {
    public:
@@ -638,6 +638,19 @@ class TextureCache {
   // implementation to update the internal dependencies of the binding.
   virtual void UpdateTextureBindingsImpl(uint32_t fetch_constant_mask) {}
 
+  // Checks if there are any pages that contain scaled resolve data within the
+  // range.
+  bool IsRangeScaledResolved(uint32_t start_unscaled, uint32_t length_unscaled);
+
+  // Whether the mips of a scaled resolve texture must be generated on the host
+  // (the guest did not resolve them into scaled memory itself).
+  bool ScaledResolveMipsNeedGeneration(const Texture& texture) {
+    const TextureKey& key = texture.key();
+    return key.scaled_resolve && key.mip_max_level != 0 &&
+           !IsRangeScaledResolved(key.mip_page << 12,
+                                  texture.GetGuestMipsSize());
+  }
+
  private:
   void UpdateTexturesTotalHostMemoryUsage(uint64_t add, uint64_t subtract);
 
@@ -646,9 +659,6 @@ class TextureCache {
                             void* context, void* data, uint64_t argument,
                             bool invalidated_by_gpu);
 
-  // Checks if there are any pages that contain scaled resolve data within the
-  // range.
-  bool IsRangeScaledResolved(uint32_t start_unscaled, uint32_t length_unscaled);
   // Global shared memory invalidation callback for invalidating scaled resolved
   // texture data.
   static void ScaledResolveGlobalWatchCallbackThunk(
